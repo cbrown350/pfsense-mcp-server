@@ -246,6 +246,45 @@ async def analyze_blocked_traffic(
 
 
 @mcp.tool(annotations=ToolAnnotations(readOnlyHint=True, destructiveHint=False))
+async def get_log_file(
+    log_file: str,
+    lines: int = 100,
+    grep: Optional[str] = None,
+) -> Dict:
+    """Read the newest lines from a pfSense log file (dhcpd, filter, resolver, system, auth).
+
+    Reads the raw circular log file server-side via clog + tail, so it works
+    for log types the REST API log endpoints don't expose (notably resolver)
+    and avoids the known server-side OOM bug on /status/logs/ endpoints.
+
+    Args:
+        log_file: Which log to read (dhcpd, filter, resolver, system, auth)
+        lines: Number of newest lines to return (default 100, max 1000)
+        grep: Optional fixed-string filter applied server-side before tail
+    """
+    client = get_api_client()
+    try:
+        result = await client.read_log_file(log_file=log_file, lines=lines, grep=grep)
+        output = result.get("data", result)
+        if isinstance(output, dict):
+            output = output.get("output", "")
+
+        return {
+            "success": True,
+            "log_file": log_file,
+            "lines_requested": max(1, min(lines, 1000)),
+            "grep": grep,
+            "output": output,
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+        }
+    except ValueError as e:
+        return {"success": False, "error": str(e)}
+    except Exception as e:
+        logger.error(f"Failed to read log file '{log_file}': {e}")
+        return {"success": False, "error": str(e)}
+
+
+@mcp.tool(annotations=ToolAnnotations(readOnlyHint=True, destructiveHint=False))
 async def search_logs_by_ip(
     ip_address: str,
     log_type: str = "firewall",

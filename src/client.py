@@ -6,6 +6,7 @@ import json
 import logging
 import os
 import random
+import shlex
 import ssl
 from datetime import datetime, timedelta
 from typing import Dict, List, Optional, Union
@@ -1286,6 +1287,17 @@ class EnhancedPfSenseAPIClient:
         "cat /tmp/rules.debug",
     })
 
+    # Log files readable via read_log_file(). Absolute allowlist of paths;
+    # the command string is always assembled from these constants plus a
+    # validated integer, never from user-supplied text.
+    _ALLOWED_LOG_FILES = {
+        "dhcpd": "/var/log/dhcpd.log",
+        "filter": "/var/log/filter.log",
+        "resolver": "/var/log/resolver.log",
+        "system": "/var/log/system.log",
+        "auth": "/var/log/auth.log",
+    }
+
     async def _run_diagnostic_command(self, command: str) -> Dict:
         """Run a diagnostic shell command on pfSense (internal use only).
 
@@ -1306,6 +1318,41 @@ class EnhancedPfSenseAPIClient:
         return await self._make_request(
             "POST", "/diagnostics/command_prompt",
             data={"command": command}
+        )
+
+    async def read_log_file(
+        self,
+        log_file: str,
+        lines: int = 100,
+        grep: Optional[str] = None,
+    ) -> Dict:
+        """Read the last N lines of an allowlisted pfSense log file via clog.
+
+        pfSense log files are binary circular logs (clog format), so they must
+        be read with the clog utility rather than cat/tail directly. This uses
+        /diagnostics/command_prompt with a command assembled ONLY from the
+        _ALLOWED_LOG_FILES path constants, a shell-escaped grep pattern, and a
+        validated integer — no user-supplied command text is ever executed.
+
+        Covers logs the /status/logs/ endpoints don't expose (notably
+        resolver.log) and avoids the known server-side OOM on log endpoints
+        (pfSense-pkg-RESTAPI#806) since tail bounds the output server-side.
+        """
+        log_file = log_file.lower().strip()
+        if log_file not in self._ALLOWED_LOG_FILES:
+            raise ValueError(
+                f"Invalid log file '{log_file}'. "
+                f"Allowed: {', '.join(sorted(self._ALLOWED_LOG_FILES))}"
+            )
+        safe_lines = max(1, min(int(lines), 1000))
+        path = self._ALLOWED_LOG_FILES[log_file]
+        command = f"clog {path} | tail -n {safe_lines}"
+        if grep:
+            command += f" | grep -F {shlex.quote(grep)}"
+        return await self._make_request(
+            "POST", "/diagnostics/command_prompt",
+            data={"command": command},
+            timeout=self.LOG_TIMEOUT * 3,
         )
 
     # Generic CRUD Methods

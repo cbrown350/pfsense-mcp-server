@@ -1,15 +1,18 @@
 """Unit tests for log tools (src/tools/logs.py)."""
 
 import httpx
+import pytest
 
 from src.tools.logs import (
     _is_oom_error,
     analyze_blocked_traffic,
     get_firewall_log,
+    get_log_file,
     search_logs_by_ip,
 )
 
 _get_firewall_log = get_firewall_log
+_get_log_file = get_log_file
 _analyze_blocked_traffic = analyze_blocked_traffic
 _search_logs_by_ip = search_logs_by_ip
 
@@ -150,3 +153,68 @@ class TestSearchLogsByIp:
         pagination = mock_make_request.call_args.kwargs.get("pagination")
         assert pagination is not None
         assert pagination.limit == 50
+
+
+# ---------------------------------------------------------------------------
+# get_log_file (raw clog reads via /diagnostics/command_prompt)
+# ---------------------------------------------------------------------------
+
+class TestGetLogFile:
+    async def test_reads_resolver_log(self, mock_client, mock_make_request):
+        mock_make_request.return_value = {"data": {"output": "resolver line\n"}}
+        result = await _get_log_file(log_file="resolver")
+        assert result["success"] is True
+        assert result["log_file"] == "resolver"
+        assert result["output"] == "resolver line\n"
+        command = mock_make_request.call_args.kwargs["data"]["command"]
+        assert command == "clog /var/log/resolver.log | tail -n 100"
+
+    @pytest.mark.parametrize("log_file,path", [
+        ("dhcpd", "/var/log/dhcpd.log"),
+        ("filter", "/var/log/filter.log"),
+        ("resolver", "/var/log/resolver.log"),
+        ("system", "/var/log/system.log"),
+        ("auth", "/var/log/auth.log"),
+    ])
+    async def test_allowlisted_paths(self, mock_client, mock_make_request, log_file, path):
+        mock_make_request.return_value = {"data": {"output": ""}}
+        result = await _get_log_file(log_file=log_file)
+        assert result["success"] is True
+        assert mock_make_request.call_args.kwargs["data"]["command"].startswith(f"clog {path} | tail")
+
+    async def test_rejects_non_allowlisted_file(self, mock_client, mock_make_request):
+        result = await _get_log_file(log_file="../../config.xml")
+        assert result["success"] is False
+        assert "Allowed" in result["error"]
+        mock_make_request.assert_not_called()
+
+    async def test_lines_capped_at_1000(self, mock_client, mock_make_request):
+        mock_make_request.return_value = {"data": {"output": ""}}
+        await _get_log_file(log_file="system", lines=99999)
+        command = mock_make_request.call_args.kwargs["data"]["command"]
+        assert command == "clog /var/log/system.log | tail -n 1000"
+
+    async def test_lines_floored_at_1(self, mock_client, mock_make_request):
+        mock_make_request.return_value = {"data": {"output": ""}}
+        await _get_log_file(log_file="system", lines=0)
+        command = mock_make_request.call_args.kwargs["data"]["command"]
+        assert command.endswith("tail -n 1")
+
+    async def test_grep_is_shell_escaped(self, mock_client, mock_make_request):
+        mock_make_request.return_value = {"data": {"output": ""}}
+        await _get_log_file(log_file="filter", grep="bad; rm -rf /")
+        command = mock_make_request.call_args.kwargs["data"]["command"]
+        # The injection attempt must arrive as a single quoted grep argument
+        assert "grep -F 'bad; rm -rf /'" in command
+
+    async def test_grep_fixed_string(self, mock_client, mock_make_request):
+        mock_make_request.return_value = {"data": {"output": ""}}
+        await _get_log_file(log_file="dhcpd", grep="192.168.1.50")
+        command = mock_make_request.call_args.kwargs["data"]["command"]
+        assert command.endswith("| grep -F 192.168.1.50")
+
+    async def test_api_error_passes_through(self, mock_client, mock_make_request):
+        mock_make_request.side_effect = Exception("clog failed")
+        result = await _get_log_file(log_file="system")
+        assert result["success"] is False
+        assert "clog failed" in result["error"]

@@ -4,7 +4,7 @@
 
 ### Manage your pfSense firewall in plain English — from Claude Desktop, Claude Code, or any MCP client.
 
-**333 tools** across every subsystem · **wire-format verified** against the pfSense REST API · **safety guardrails** on every change
+**334 tools** across every subsystem · **wire-format verified** against the pfSense REST API · **safety guardrails** on every change
 
 <br>
 
@@ -148,7 +148,7 @@ firewall rules — treat that credential accordingly.
 
 ## What You Can Do
 
-333 tools across every major pfSense subsystem:
+334 tools across every major pfSense subsystem:
 
 | Domain | Tools | What You Can Do |
 |---|:---:|---|
@@ -164,7 +164,7 @@ firewall rules — treat that credential accordingly.
 | **Interfaces** | 14 | Interface config, VLANs, bridges, groups. |
 | **System** | 44 | Status, settings, diagnostics, state table, config history, reboot, ping. |
 | **Services** | 14 | Start/stop/restart services. NTP, cron, SSH, service watchdog. |
-| **Logs** | 3 | Firewall log analysis with parsed IPv4/IPv6 filterlog data. |
+| **Logs** | 4 | Firewall log analysis with parsed IPv4/IPv6 filterlog data. Raw reads of dhcpd/filter/resolver/system/auth log files via clog. |
 | **Traffic Shaping** | 12 | Shapers, queues, and limiters for bandwidth management. |
 | **Schedules** | 8 | Time-based firewall rule scheduling. |
 | **Virtual IPs** | 5 | CARP, ProxyARP, and IP Alias management. |
@@ -327,7 +327,7 @@ both transports, in CI on every push:
 make test-e2e            # or: ./scripts/inspector_smoke.sh  (needs node/npx, jq)
 ```
 
-It verifies the initialize handshake, the 333-tool listing with annotations,
+It verifies the initialize handshake, the 334-tool listing with annotations,
 the guardrail confirm-gate over the wire, read-only mode, and HTTP bearer-auth
 plus Origin enforcement — no pfSense instance required.
 
@@ -335,7 +335,7 @@ plus Origin enforcement — no pfSense instance required.
 
 Compliant with [MCP 2025-11-25](https://modelcontextprotocol.io/specification/2025-11-25) — the newest revision with stable SDK support — and negotiates down to older revisions per connection, so existing clients keep working:
 
-- `ToolAnnotations` on all 333 tools (readOnlyHint, destructiveHint, idempotentHint)
+- `ToolAnnotations` on all 334 tools (readOnlyHint, destructiveHint, idempotentHint)
 - `serverInfo.version` and `instructions` provided
 - Origin header validation (MUST requirement)
 - Bearer token auth with timing-safe comparison
@@ -359,7 +359,7 @@ src/
   helpers.py           Validation, parsing, pagination, safety guards
   models.py            Data models
   middleware.py        HTTP bearer auth + Origin validation + /health
-  tools/               34 tool modules (333 tools)
+  tools/               34 tool modules (334 tools)
 scripts/
   generate_contract.py Regenerate the wire contract from an OpenAPI spec
   generate_token.py    Generate a secure MCP_API_KEY bearer token

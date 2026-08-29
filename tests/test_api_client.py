@@ -823,6 +823,38 @@ class TestDiagnosticCommand:
         assert data["command"] == "cat /tmp/rules.debug"
 
 
+class TestReadLogFile:
+    async def test_builds_clog_pipeline(self, mock_client, mock_make_request):
+        mock_make_request.return_value = {"data": {"output": "line"}}
+        await mock_client.read_log_file("resolver", lines=25)
+        call_args = mock_make_request.call_args
+        assert call_args[0][1] == "/diagnostics/command_prompt"
+        data = call_args.kwargs.get("data") or call_args[1].get("data")
+        assert data["command"] == "clog /var/log/resolver.log | tail -n 25"
+
+    async def test_rejects_non_allowlisted_file(self, mock_client, mock_make_request):
+        with pytest.raises(ValueError, match="Allowed"):
+            await mock_client.read_log_file("/etc/passwd")
+        mock_make_request.assert_not_called()
+
+    async def test_rejects_path_traversal(self, mock_client, mock_make_request):
+        with pytest.raises(ValueError, match="Allowed"):
+            await mock_client.read_log_file("filter; cat /etc/passwd")
+        mock_make_request.assert_not_called()
+
+    async def test_grep_quoted_with_shlex(self, mock_client, mock_make_request):
+        import shlex
+
+        mock_make_request.return_value = {"data": {"output": ""}}
+        pattern = "failed password'; whoami"
+        await mock_client.read_log_file("auth", grep=pattern)
+        data = mock_make_request.call_args.kwargs.get("data") or {}
+        parts = shlex.split(data["command"])
+        # Pattern must survive as a single grep argument, never shell syntax
+        assert parts[0] == "clog"
+        assert parts[2:] == ["|", "tail", "-n", "100", "|", "grep", "-F", pattern]
+
+
 # ---------------------------------------------------------------------------
 # Firewall log filtering
 # ---------------------------------------------------------------------------
