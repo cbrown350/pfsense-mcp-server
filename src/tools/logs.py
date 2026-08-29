@@ -269,18 +269,24 @@ async def get_log_file(
     client = get_api_client()
     try:
         result = await client.read_log_file(log_file=log_file, lines=lines, grep=grep)
-        data = result.get("data", result)
+        # _make_request hands back response.json() verbatim, so a body that
+        # isn't a JSON object (anything in front of the API answering 200 with
+        # a bare string) must not blow up on .get().
+        data = result.get("data", result) if isinstance(result, dict) else result
         if isinstance(data, dict):
             output = data.get("output") or ""
             result_code = data.get("result_code")
         else:
             output, result_code = data, None
 
-        # The command sink merges stderr into `output` (Command defaults to
+        # The command sink merges stderr into `output` (Command appends
         # `2>&1`), so a non-zero exit means `output` holds an error message
         # rather than log lines — reporting that as a successful read would
-        # hand the caller the error text as if it were log content.
-        if result_code not in (None, 0):
+        # hand the caller the error text as if it were log content. The one
+        # non-zero status that isn't a failure is grep's exit 1: the pattern
+        # simply matched nothing, which is an empty result.
+        no_match = bool(grep) and result_code == client.GREP_NO_MATCH_EXIT
+        if result_code not in (None, 0) and not no_match:
             return {
                 "success": False,
                 "log_file": log_file,
@@ -293,7 +299,7 @@ async def get_log_file(
             "log_file": log_file,
             "lines_requested": client.clamp_log_file_lines(lines),
             "grep": grep,
-            "output": output,
+            "output": "" if no_match else output,
             "timestamp": datetime.now(timezone.utc).isoformat(),
         }
     except ValueError as e:

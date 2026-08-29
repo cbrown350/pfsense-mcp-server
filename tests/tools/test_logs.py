@@ -211,14 +211,18 @@ class TestGetLogFile:
         command = mock_make_request.call_args.kwargs["data"]["command"]
         # The injection attempt must arrive as a single quoted grep argument
         assert command == (
-            "grep -F -e 'bad; rm -rf /' /var/log/filter.log | tail -n 100"
+            "set -o pipefail; "
+            "{ grep -F -e 'bad; rm -rf /' /var/log/filter.log | tail -n 100; }"
         )
 
     async def test_grep_runs_before_tail(self, mock_client, mock_make_request):
         mock_make_request.return_value = {"data": {"output": "", "result_code": 0}}
         await _get_log_file(log_file="dhcpd", grep="192.168.1.50", lines=20)
         command = mock_make_request.call_args.kwargs["data"]["command"]
-        assert command == "grep -F -e 192.168.1.50 /var/log/dhcpd.log | tail -n 20"
+        assert command == (
+            "set -o pipefail; "
+            "{ grep -F -e 192.168.1.50 /var/log/dhcpd.log | tail -n 20; }"
+        )
 
     async def test_nonzero_result_code_is_a_failure(self, mock_client, mock_make_request):
         """stderr is merged into `output`; a failed read must not look successful."""
@@ -242,11 +246,58 @@ class TestGetLogFile:
         assert result["success"] is True
         assert result["output"] == ""
 
+    async def test_grep_no_match_exit_is_success(self, mock_client, mock_make_request):
+        """Under pipefail grep's exit 1 reaches us; it still means "no matches"."""
+        mock_make_request.return_value = {"data": {"output": "", "result_code": 1}}
+        result = await _get_log_file(log_file="filter", grep="nothing-matches")
+        assert result["success"] is True
+        assert result["output"] == ""
+
+    async def test_grep_read_error_is_a_failure(self, mock_client, mock_make_request):
+        """A grep that can't read the file must not pass as an empty result.
+
+        Regression guard for the bare pipeline: `grep ... | tail` reported the
+        exit status of tail, so a missing file arrived as exit 0 with no
+        output. Grouping the pipeline under pipefail surfaces grep's 2 and its
+        stderr instead.
+        """
+        mock_make_request.return_value = {
+            "data": {
+                "output": "grep: /var/log/resolver.log: No such file or directory",
+                "result_code": 2,
+            }
+        }
+        result = await _get_log_file(log_file="resolver", grep="SERVFAIL")
+        assert result["success"] is False
+        assert result["result_code"] == 2
+        assert "No such file" in result["error"]
+
+    async def test_exit_one_without_grep_is_still_a_failure(
+        self, mock_client, mock_make_request
+    ):
+        """Only grep gets the no-match exemption; a lone tail's 1 is an error."""
+        mock_make_request.return_value = {
+            "data": {
+                "output": "tail: /var/log/dhcpd.log: No such file or directory",
+                "result_code": 1,
+            }
+        }
+        result = await _get_log_file(log_file="dhcpd")
+        assert result["success"] is False
+        assert result["result_code"] == 1
+
     async def test_missing_result_code_is_tolerated(self, mock_client, mock_make_request):
         mock_make_request.return_value = {"data": {"output": "line"}}
         result = await _get_log_file(log_file="system")
         assert result["success"] is True
         assert result["output"] == "line"
+
+    async def test_non_dict_response_does_not_raise(self, mock_client, mock_make_request):
+        """_make_request returns response.json() verbatim — it needn't be an object."""
+        mock_make_request.return_value = "raw log text"
+        result = await _get_log_file(log_file="system")
+        assert result["success"] is True
+        assert result["output"] == "raw log text"
 
     async def test_api_error_passes_through(self, mock_client, mock_make_request):
         mock_make_request.side_effect = Exception("command sink failed")

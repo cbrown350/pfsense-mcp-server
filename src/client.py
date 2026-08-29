@@ -1300,6 +1300,12 @@ class EnhancedPfSenseAPIClient:
 
     MAX_LOG_FILE_LINES = 1000
 
+    # grep exits 1 when the pattern matched nothing. With pipefail that status
+    # reaches the caller, so read_log_file()'s consumer has to read it as "no
+    # matches" (an empty but successful read) rather than a read failure.
+    # Anything above 1 is a genuine error (2 = file missing/unreadable).
+    GREP_NO_MATCH_EXIT = 1
+
     @classmethod
     def clamp_log_file_lines(cls, lines: int) -> int:
         """Clamp a requested line count to [1, MAX_LOG_FILE_LINES]."""
@@ -1350,6 +1356,10 @@ class EnhancedPfSenseAPIClient:
         resolver.log) and avoids the known server-side OOM on log endpoints
         (pfSense-pkg-RESTAPI#806) since both stages stream and tail bounds the
         output server-side.
+
+        Exit status is meaningful: 0 is a good read, 1 with a grep pattern
+        means nothing matched, anything higher is a read error whose message
+        is in the command output.
         """
         log_file = log_file.lower().strip()
         if log_file not in self._ALLOWED_LOG_FILES:
@@ -1362,8 +1372,22 @@ class EnhancedPfSenseAPIClient:
         if grep:
             # -e keeps a pattern that starts with "-" a pattern; shlex.quote
             # leaves such a value bare because it needs no shell quoting.
-            command = f"grep -F -e {shlex.quote(grep)} {path} | tail -n {safe_lines}"
+            #
+            # RESTAPI\Core\Command appends its `2>&1` redirect to the *whole*
+            # command string, so in a bare `grep ... | tail ...` the redirect
+            # binds to tail alone and the exit status is tail's. A grep that
+            # can't read the file would then come back as exit 0 with empty
+            # output — a read failure wearing a successful empty result.
+            # Grouping the pipeline hands the appended redirect the whole
+            # group, and pipefail (in FreeBSD /bin/sh since 2019, so on every
+            # pfSense in the compatibility matrix) lets grep's status survive.
+            command = (
+                "set -o pipefail; "
+                f"{{ grep -F -e {shlex.quote(grep)} {path} "
+                f"| tail -n {safe_lines}; }}"
+            )
         else:
+            # No pipeline, so tail's own status and stderr already survive.
             command = f"tail -n {safe_lines} {path}"
         return await self._make_request(
             "POST", "/diagnostics/command_prompt",

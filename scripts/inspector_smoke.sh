@@ -38,6 +38,9 @@ cat > "$WRAPPER" <<EOF
 export PFSENSE_URL="$PFSENSE_URL"
 export PFSENSE_API_KEY="$PFSENSE_API_KEY"
 export API_TIMEOUT="$API_TIMEOUT"
+# Pinned, not inherited: MCP_ENABLE_LOG_FILES=false drops get_log_file, which
+# would put EXPECTED_TOOLS and EXPECTED_READONLY one over the real count.
+export MCP_ENABLE_LOG_FILES=true
 cd "$REPO_ROOT"
 exec "$PYTHON" -m src.main
 EOF

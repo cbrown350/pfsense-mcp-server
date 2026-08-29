@@ -848,7 +848,39 @@ class TestReadLogFile:
         mock_make_request.return_value = {"data": {"output": "", "result_code": 0}}
         await mock_client.read_log_file("filter", lines=25, grep="block")
         data = mock_make_request.call_args.kwargs.get("data") or {}
-        assert data["command"] == "grep -F -e block /var/log/filter.log | tail -n 25"
+        assert data["command"] == (
+            "set -o pipefail; "
+            "{ grep -F -e block /var/log/filter.log | tail -n 25; }"
+        )
+
+    async def test_grep_pipeline_is_grouped_and_pipefailed(
+        self, mock_client, mock_make_request
+    ):
+        """Otherwise the sink's appended `2>&1` and the exit status are tail's.
+
+        RESTAPI\\Core\\Command runs `<command> 2>&1`. In a bare pipeline that
+        redirect binds to tail and the status is tail's, so a grep that cannot
+        read the file returns exit 0 with empty output. The brace group gives
+        the redirect the whole pipeline; pipefail keeps grep's status.
+        """
+        mock_make_request.return_value = {"data": {"output": "", "result_code": 0}}
+        await mock_client.read_log_file("auth", lines=10, grep="denied")
+        command = mock_make_request.call_args.kwargs["data"]["command"]
+        assert command.startswith("set -o pipefail; { ")
+        assert command.endswith("; }")
+        # The sink appends its redirect to the whole string; with the group in
+        # place that lands outside the braces and so covers grep too.
+        assert f"{command} 2>&1".endswith("; } 2>&1")
+
+    async def test_no_grep_needs_no_pipeline_scaffolding(
+        self, mock_client, mock_make_request
+    ):
+        """A lone tail already reports its own status and stderr."""
+        mock_make_request.return_value = {"data": {"output": "", "result_code": 0}}
+        await mock_client.read_log_file("system", lines=10)
+        command = mock_make_request.call_args.kwargs["data"]["command"]
+        assert command == "tail -n 10 /var/log/system.log"
+        assert "pipefail" not in command
 
     async def test_grep_quoted_with_shlex(self, mock_client, mock_make_request):
         import shlex
@@ -857,7 +889,8 @@ class TestReadLogFile:
         pattern = "failed password'; whoami"
         await mock_client.read_log_file("auth", grep=pattern)
         data = mock_make_request.call_args.kwargs.get("data") or {}
-        parts = shlex.split(data["command"])
+        pipeline = data["command"].split("{ ", 1)[1].rsplit("; }", 1)[0]
+        parts = shlex.split(pipeline)
         # Pattern must survive as a single grep argument, never shell syntax
         assert parts == [
             "grep", "-F", "-e", pattern, "/var/log/auth.log",
@@ -871,7 +904,7 @@ class TestReadLogFile:
         mock_make_request.return_value = {"data": {"output": "", "result_code": 0}}
         await mock_client.read_log_file("system", grep="-v")
         data = mock_make_request.call_args.kwargs.get("data") or {}
-        assert data["command"].startswith("grep -F -e -v /var/log/system.log")
+        assert "grep -F -e -v /var/log/system.log" in data["command"]
 
     @pytest.mark.parametrize("requested,expected", [
         (0, 1), (-5, 1), (1, 1), (999, 999), (1000, 1000), (99999, 1000),
