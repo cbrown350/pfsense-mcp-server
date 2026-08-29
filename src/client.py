@@ -6,6 +6,7 @@ import json
 import logging
 import os
 import random
+import shlex
 import ssl
 from datetime import datetime, timedelta
 from typing import Dict, List, Optional, Union
@@ -1286,6 +1287,24 @@ class EnhancedPfSenseAPIClient:
         "cat /tmp/rules.debug",
     })
 
+    # Log files readable via read_log_file(). Absolute allowlist of paths;
+    # the command string is always assembled from these constants plus a
+    # validated integer, never from user-supplied text.
+    _ALLOWED_LOG_FILES = {
+        "dhcpd": "/var/log/dhcpd.log",
+        "filter": "/var/log/filter.log",
+        "resolver": "/var/log/resolver.log",
+        "system": "/var/log/system.log",
+        "auth": "/var/log/auth.log",
+    }
+
+    MAX_LOG_FILE_LINES = 1000
+
+    @classmethod
+    def clamp_log_file_lines(cls, lines: int) -> int:
+        """Clamp a requested line count to [1, MAX_LOG_FILE_LINES]."""
+        return max(1, min(int(lines), cls.MAX_LOG_FILE_LINES))
+
     async def _run_diagnostic_command(self, command: str) -> Dict:
         """Run a diagnostic shell command on pfSense (internal use only).
 
@@ -1306,6 +1325,50 @@ class EnhancedPfSenseAPIClient:
         return await self._make_request(
             "POST", "/diagnostics/command_prompt",
             data={"command": command}
+        )
+
+    async def read_log_file(
+        self,
+        log_file: str,
+        lines: int = 100,
+        grep: Optional[str] = None,
+    ) -> Dict:
+        """Read the last N lines of an allowlisted pfSense log file.
+
+        pfSense CE 2.5.0 / Plus 21.02 dropped the binary circular-log (clog)
+        format for plain text rotated by newsyslog, and stopped shipping the
+        clog binary with it, so /var/log/*.log is read with tail/grep. Every
+        version this server supports is well past that cutover.
+
+        The command goes to /diagnostics/command_prompt assembled ONLY from the
+        _ALLOWED_LOG_FILES path constants, a validated integer, and a
+        shlex-quoted grep pattern — no user-supplied command text is ever
+        executed. grep runs *before* tail so the newest N matching lines come
+        back, not the matches within the newest N lines.
+
+        Covers logs the /status/logs/ endpoints don't expose (notably
+        resolver.log) and avoids the known server-side OOM on log endpoints
+        (pfSense-pkg-RESTAPI#806) since both stages stream and tail bounds the
+        output server-side.
+        """
+        log_file = log_file.lower().strip()
+        if log_file not in self._ALLOWED_LOG_FILES:
+            raise ValueError(
+                f"Invalid log file '{log_file}'. "
+                f"Allowed: {', '.join(sorted(self._ALLOWED_LOG_FILES))}"
+            )
+        safe_lines = self.clamp_log_file_lines(lines)
+        path = self._ALLOWED_LOG_FILES[log_file]
+        if grep:
+            # -e keeps a pattern that starts with "-" a pattern; shlex.quote
+            # leaves such a value bare because it needs no shell quoting.
+            command = f"grep -F -e {shlex.quote(grep)} {path} | tail -n {safe_lines}"
+        else:
+            command = f"tail -n {safe_lines} {path}"
+        return await self._make_request(
+            "POST", "/diagnostics/command_prompt",
+            data={"command": command},
+            timeout=self.LOG_TIMEOUT * 3,
         )
 
     # Generic CRUD Methods

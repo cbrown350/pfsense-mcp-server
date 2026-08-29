@@ -823,6 +823,63 @@ class TestDiagnosticCommand:
         assert data["command"] == "cat /tmp/rules.debug"
 
 
+class TestReadLogFile:
+    async def test_tails_the_plain_text_log(self, mock_client, mock_make_request):
+        mock_make_request.return_value = {"data": {"output": "line", "result_code": 0}}
+        await mock_client.read_log_file("resolver", lines=25)
+        call_args = mock_make_request.call_args
+        assert call_args[0][1] == "/diagnostics/command_prompt"
+        data = call_args.kwargs.get("data") or call_args[1].get("data")
+        # clog was removed in pfSense 2.5.0/21.02 — logs are plain text now.
+        assert data["command"] == "tail -n 25 /var/log/resolver.log"
+
+    async def test_rejects_non_allowlisted_file(self, mock_client, mock_make_request):
+        with pytest.raises(ValueError, match="Allowed"):
+            await mock_client.read_log_file("/etc/passwd")
+        mock_make_request.assert_not_called()
+
+    async def test_rejects_path_traversal(self, mock_client, mock_make_request):
+        with pytest.raises(ValueError, match="Allowed"):
+            await mock_client.read_log_file("filter; cat /etc/passwd")
+        mock_make_request.assert_not_called()
+
+    async def test_grep_runs_before_tail(self, mock_client, mock_make_request):
+        """Newest N *matching* lines, not the matches inside the newest N lines."""
+        mock_make_request.return_value = {"data": {"output": "", "result_code": 0}}
+        await mock_client.read_log_file("filter", lines=25, grep="block")
+        data = mock_make_request.call_args.kwargs.get("data") or {}
+        assert data["command"] == "grep -F -e block /var/log/filter.log | tail -n 25"
+
+    async def test_grep_quoted_with_shlex(self, mock_client, mock_make_request):
+        import shlex
+
+        mock_make_request.return_value = {"data": {"output": "", "result_code": 0}}
+        pattern = "failed password'; whoami"
+        await mock_client.read_log_file("auth", grep=pattern)
+        data = mock_make_request.call_args.kwargs.get("data") or {}
+        parts = shlex.split(data["command"])
+        # Pattern must survive as a single grep argument, never shell syntax
+        assert parts == [
+            "grep", "-F", "-e", pattern, "/var/log/auth.log",
+            "|", "tail", "-n", "100",
+        ]
+
+    async def test_grep_pattern_starting_with_dash_is_not_an_option(
+        self, mock_client, mock_make_request
+    ):
+        """shlex.quote leaves "-v" bare, so -e is what keeps it a pattern."""
+        mock_make_request.return_value = {"data": {"output": "", "result_code": 0}}
+        await mock_client.read_log_file("system", grep="-v")
+        data = mock_make_request.call_args.kwargs.get("data") or {}
+        assert data["command"].startswith("grep -F -e -v /var/log/system.log")
+
+    @pytest.mark.parametrize("requested,expected", [
+        (0, 1), (-5, 1), (1, 1), (999, 999), (1000, 1000), (99999, 1000),
+    ])
+    def test_clamp_log_file_lines(self, mock_client, requested, expected):
+        assert mock_client.clamp_log_file_lines(requested) == expected
+
+
 # ---------------------------------------------------------------------------
 # Firewall log filtering
 # ---------------------------------------------------------------------------
