@@ -287,6 +287,7 @@ environments that already run one.
 | `PFSENSE_CA_FILE` | | — | PEM file for pfSense's private/self-signed CA, so verification stays on |
 | `API_TIMEOUT` | | `30` | Request timeout in seconds |
 | `MCP_READ_ONLY` | | `false` | Only expose read-only tools |
+| `MCP_ENABLE_LOG_FILES` | | `true` | Set `false` to remove `get_log_file` (raw `/var/log/*` reads via command sink) |
 
 <details>
 <summary>All configuration options</summary>
@@ -304,7 +305,7 @@ environments that already run one.
 | `MCP_RATE_LIMIT_DELETE` | `10` | Max deletes per 60 seconds |
 | `MCP_RATE_LIMIT_CREATE` | `20` | Max creates per 60 seconds |
 | `MCP_RATE_LIMIT_CRITICAL` | `2` | Max critical ops per 300 seconds |
-| `MCP_ALLOWED_TOOLS` | all | Comma-separated tool allowlist |
+| `MCP_ALLOWED_TOOLS` | all | Comma-separated tool allowlist (applies to non-READ tools; `get_log_file` is controlled by `MCP_ENABLE_LOG_FILES`) |
 | `MCP_ROLLBACK_BUFFER` | `50` | Rollback entries kept in memory |
 
 </details>
